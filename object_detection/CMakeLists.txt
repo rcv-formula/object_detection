@@ -62,6 +62,7 @@ ament_target_dependencies(obstacle_tracker_node
 add_executable(visualization_node src/visualization_node.cpp)
 ament_target_dependencies(visualization_node
   rclcpp
+  nav_msgs
   visualization_msgs
 )
 

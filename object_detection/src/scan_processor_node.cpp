@@ -63,7 +63,7 @@ public:
     this->get_parameter("min_obstacle_cluster_density", min_obstacle_cluster_density_);
     this->get_parameter("dynamic_wall_gap_factor", dynamic_wall_gap_factor_);
     
-    scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>("/scan", 10, std::bind(&ScanProcessor::scanCallback, this, std::placeholders::_1));
+    scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>("/scan", 20, std::bind(&ScanProcessor::scanCallback, this, std::placeholders::_1));
     candidate_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/obstacle_candidates", 10);
     filtered_scan_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("filtered_scan_points", 10);
   }
@@ -243,6 +243,26 @@ private:
       filtered_points.insert(filtered_points.end(), current_cluster.begin(), current_cluster.end());
     }
     return filtered_points;
+  }
+  // --- 새로 추가된 함수: 두 후보점 사이를 선형 보간하여 중간 점들을 생성 ---
+  std::vector<geometry_msgs::msg::PointStamped> interpolateCandidates(
+      const geometry_msgs::msg::PointStamped& p1,
+      const geometry_msgs::msg::PointStamped& p2,
+      int num_points)
+  {
+    std::vector<geometry_msgs::msg::PointStamped> interp;
+    for (int i = 1; i <= num_points; i++) {
+      double fraction = static_cast<double>(i) / (num_points + 1);
+      geometry_msgs::msg::PointStamped new_point;
+      new_point.header.frame_id = p1.header.frame_id;
+      // stamp는 p1의 시간으로 설정하거나 현재시간/평균시간으로 설정할 수 있음.
+      new_point.header.stamp = p1.header.stamp;
+      new_point.point.x = p1.point.x + fraction * (p2.point.x - p1.point.x);
+      new_point.point.y = p1.point.y + fraction * (p2.point.y - p1.point.y);
+      new_point.point.z = 0.0;
+      interp.push_back(new_point);
+    }
+    return interp;
   }
   
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan_msg) {
