@@ -2,6 +2,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <vector>
 #include <cmath>
 #include <memory>
@@ -33,12 +34,16 @@ public:
     this->declare_parameter<double>("kalman_process_noise", 0.1);
     this->declare_parameter<double>("kalman_measurement_noise", 0.1);
 
+    // 장애물 측정 timeout (측정이 이 시간 이상 없으면 장애물 없음으로 간주)
+    this->declare_parameter<double>("obstacle_timeout", 1.0);
+
     // 파라미터 취득
     this->get_parameter("dbscan_eps", dbscan_eps_);
     this->get_parameter("dbscan_min_points", dbscan_min_points_);
     this->get_parameter("use_weighted_median", use_weighted_median_);
     this->get_parameter("kalman_process_noise", kalman_process_noise_);
     this->get_parameter("kalman_measurement_noise", kalman_measurement_noise_);
+    this->get_parameter("obstacle_timeout", obstacle_timeout_);
 
     // 후보점 수신: 센서에서 전달받은 장애물 후보점을 단순히 저장
     candidate_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
@@ -49,6 +54,9 @@ public:
 
     // odom 퍼블리셔 (시각화는 별도 노드에서 처리)
     odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/opponent_odom", 20);
+
+    // 장애물 존재 여부 퍼블리셔
+    obstacle_detected_pub_ = this->create_publisher<std_msgs::msg::Bool>("/obstacle_detected", 20);
 
     // 주기적으로 후보 데이터를 처리하고 odom을 퍼블리시하는 타이머 (예: 100ms)
     timer_ = this->create_wall_timer(
@@ -137,6 +145,8 @@ private:
 
       if (best_cluster != -1 && best_cluster_size > 0) {
         measurement_available = true;
+        // 측정이 이루어진 경우, 마지막 측정 시간 업데이트
+        last_measurement_time_ = now;
         // ----------------------------
         // 3. 대표점 산출: 가중 평균 또는 가중 중앙값
         // ----------------------------
@@ -267,6 +277,18 @@ private:
     if (kalman_initialized_) {
       publishOdomWithKalmanState(now);
     }
+
+    // ----------------------------
+    // 6. 장애물 감지 상태(bool) 퍼블리시
+    // ----------------------------
+    std_msgs::msg::Bool detected_msg;
+    // 측정 업데이트가 일정 시간(obstacle_timeout_) 이내에 있었으면 장애물이 존재하는 것으로 판단.
+    if (kalman_initialized_ && (now - last_measurement_time_).seconds() < obstacle_timeout_) {
+      detected_msg.data = true;
+    } else {
+      detected_msg.data = false;
+    }
+    obstacle_detected_pub_->publish(detected_msg);
   }
 
   // 칼만 필터 상태를 이용해 odom 메시지를 퍼블리시 (orientation은 이전 위치와 현재 위치의 차이로 계산)
@@ -328,6 +350,7 @@ private:
   // 멤버 변수
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr candidate_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr obstacle_detected_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // 후보점 버퍼 (타이머 주기마다 클러스터링)
@@ -353,6 +376,11 @@ private:
   double prev_y_;
   double prev_heading_;
   bool has_prev_position_;
+
+  // 마지막으로 측정이 들어온 시간 (obstacle 존재 여부 판단용)
+  rclcpp::Time last_measurement_time_;
+  // 측정 timeout 시간 (초)
+  double obstacle_timeout_;
 };
 
 int main(int argc, char ** argv) {
