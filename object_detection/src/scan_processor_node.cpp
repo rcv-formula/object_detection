@@ -43,9 +43,7 @@ public:
     this->declare_parameter<double>("far_obstacle_distance_threshold", 5.0); // 3m 이상이면
     this->declare_parameter<int>("far_obstacle_min_points", 3);              // 최소 3개의 점이 필요
     this->declare_parameter<double>("min_obstacle_cluster_density", 4.0);    // 밀도가 낮은 클러스터는 벽 등으로 인해 발생한 값으로 판단하여 제외합니다.
-    
-    // *** 새로 추가: 먼 거리 벽 그룹화를 위한 동적 임계값 배율 (예: 1.5) ***
-    this->declare_parameter<double>("dynamic_wall_gap_factor", 1.5);
+    this->declare_parameter<double>("dynamic_wall_gap_factor", 1.5);         // 먼 거리 벽 그룹화를 위한 동적 임계값 배율
     
     // 파라미터 값 로드
     this->get_parameter("scan_range_min", scan_range_min_);

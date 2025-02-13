@@ -6,18 +6,15 @@
 class ObstacleVisualizer : public rclcpp::Node {
 public:
   ObstacleVisualizer() : Node("obstacle_visualizer") {
-    // 구독: obstacle_tracker 노드에서 퍼블리시하는 odom 메시지
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
       "/opponent_odom", 20,
       std::bind(&ObstacleVisualizer::odomCallback, this, std::placeholders::_1));
     
-    // 마커 퍼블리셔: rviz 시각화용
     marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("Obst_tracker_visualization_marker", 20);
   }
 
 private:
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom_msg) {
-    // odom 메시지의 pose 정보를 이용하여 Marker 메시지 생성
     visualization_msgs::msg::Marker marker_msg;
     marker_msg.header = odom_msg->header;
     marker_msg.ns = "obstacle_tracker";

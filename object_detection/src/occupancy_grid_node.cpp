@@ -10,10 +10,9 @@
 class OccupancyGridNode : public rclcpp::Node {
 public:
     OccupancyGridNode() : Node("occupancy_grid_node") {
-        // 파라미터 선언
         this->declare_parameter<std::string>("pgm_file", "");
         this->declare_parameter<std::string>("yaml_file", "");
-        this->declare_parameter<double>("inflation_radius", 0.05); // 인플레이션 반경 (단위: 미터)
+        this->declare_parameter<double>("inflation_radius", 0.05); // (m) 인플레이션 반경
 
         this->get_parameter("pgm_file", pgm_file_);
         this->get_parameter("yaml_file", yaml_file_);
@@ -120,7 +119,6 @@ private:
         // 인플레이션 적용: 장애물과 인접한 free cell에 대해 비용 부여
         inflateMap(occupancy_data, width, height, inflation_radius_, resolution);
 
-        // OccupancyGrid 메시지 구성
         map_data_.info.resolution = resolution;
         map_data_.info.width = width;
         map_data_.info.height = height;
@@ -134,7 +132,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Map loading completed: %d x %d, resolution: %.3f", width, height, resolution);
     }
 
-    // 인플레이션 함수: 장애물(100) 주변의 free 셀(0)에 대해, 거리에 따른 비용(0~99)을 할당합니다.
+    // 인플레이션 함수: 장애물(100) 주변의 free 셀(0)에 대해, 거리에 따른 비용(0~99)을 할당
     void inflateMap(std::vector<int8_t>& occupancy_data, int width, int height, double inflation_radius, double resolution) {
         int inflation_radius_cells = std::ceil(inflation_radius / resolution);
         // 원본 데이터를 보존하기 위해 복사본 생성
