@@ -33,6 +33,8 @@ public:
     // 칼만 필터 관련 파라미터
     this->declare_parameter<double>("kalman_process_noise", 0.1);
     this->declare_parameter<double>("kalman_measurement_noise", 0.1);
+    // 칼만 필터 적용 여부 파라미터 (true: 칼만 필터 적용, false: 미적용)
+    this->declare_parameter<bool>("use_kalman_filter", true);
 
     // 장애물 측정 timeout (측정이 이 시간 이상 없으면 장애물 없음으로 간주)
     this->declare_parameter<double>("obstacle_timeout", 1.0);
@@ -43,6 +45,7 @@ public:
     this->get_parameter("use_weighted_median", use_weighted_median_);
     this->get_parameter("kalman_process_noise", kalman_process_noise_);
     this->get_parameter("kalman_measurement_noise", kalman_measurement_noise_);
+    this->get_parameter("use_kalman_filter", use_kalman_filter_);
     this->get_parameter("obstacle_timeout", obstacle_timeout_);
 
     // 후보점 수신: 센서에서 전달받은 장애물 후보점을 단순히 저장
@@ -221,54 +224,67 @@ private:
     // ----------------------------
     // 4. 칼만 필터 업데이트 (측정이 없으면 예측만 수행)
     // ----------------------------
-    double dt = 0.1; // 기본 dt (타이머 주기)
-    if (kalman_initialized_) {
-      dt = (now - last_kf_time_).seconds();
-      // 예측 단계: 상태 전이 F 적용 (상태: [x, y, vx, vy])
-      kf_state_[0] = kf_state_[0] + kf_state_[2] * dt;
-      kf_state_[1] = kf_state_[1] + kf_state_[3] * dt;
-      // 간단히 속도는 그대로 둠.
-      for (int i = 0; i < 4; i++) {
-        kf_P_[i][i] += kalman_process_noise_;
+    if (use_kalman_filter_) {
+      // 칼만 필터 적용 시: 기존의 칼만 필터 로직 수행
+      double dt = 0.1; // 기본 dt (타이머 주기)
+      if (kalman_initialized_) {
+        dt = (now - last_kf_time_).seconds();
+        // 예측 단계: 상태 전이 F 적용 (상태: [x, y, vx, vy])
+        kf_state_[0] = kf_state_[0] + kf_state_[2] * dt;
+        kf_state_[1] = kf_state_[1] + kf_state_[3] * dt;
+        // 간단히 속도는 그대로 둠.
+        for (int i = 0; i < 4; i++) {
+          kf_P_[i][i] += kalman_process_noise_;
+        }
+      } else {
+        // 초기화: 측정이 있을 때만 초기 상태를 설정
+        if (measurement_available) {
+          kf_state_[0] = meas_x;
+          kf_state_[1] = meas_y;
+          kf_state_[2] = 0.0;
+          kf_state_[3] = 0.0;
+          for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+              kf_P_[i][j] = (i == j) ? 1.0 : 0.0;
+            }
+          }
+          kalman_initialized_ = true;
+          last_kf_time_ = now;
+        }
+      }
+      
+      // 칼만 필터 측정 업데이트 (update 단계)
+      if (measurement_available && kalman_initialized_) {
+        double z[2] = { meas_x, meas_y };
+        double y[2] = { z[0] - kf_state_[0], z[1] - kf_state_[1] };
+        double S[2][2] = {
+          { kf_P_[0][0] + kalman_measurement_noise_, kf_P_[0][1] },
+          { kf_P_[1][0], kf_P_[1][1] + kalman_measurement_noise_ }
+        };
+        double invS0 = 1.0 / S[0][0];
+        double invS1 = 1.0 / S[1][1];
+        double K[4][2];
+        for (int i = 0; i < 4; i++) {
+          K[i][0] = kf_P_[i][0] * invS0;
+          K[i][1] = kf_P_[i][1] * invS1;
+        }
+        for (int i = 0; i < 4; i++) {
+          kf_state_[i] += K[i][0] * y[0] + K[i][1] * y[1];
+        }
+        kf_P_[0][0] = (1 - K[0][0]) * kf_P_[0][0];
+        kf_P_[1][1] = (1 - K[1][1]) * kf_P_[1][1];
+        last_kf_time_ = now;
       }
     } else {
-      // 초기화: 측정이 있을 때만 초기 상태를 설정
+      // 칼만 필터 미적용 시: 측정값이 있으면 직접 상태에 할당 (예측/업데이트 없이)
       if (measurement_available) {
         kf_state_[0] = meas_x;
         kf_state_[1] = meas_y;
         kf_state_[2] = 0.0;
         kf_state_[3] = 0.0;
-        for (int i = 0; i < 4; i++) {
-          for (int j = 0; j < 4; j++) {
-            kf_P_[i][j] = (i == j) ? 1.0 : 0.0;
-          }
-        }
         kalman_initialized_ = true;
         last_kf_time_ = now;
       }
-    }
-    
-    // 칼만 필터 측정 업데이트 (update 단계)
-    if (measurement_available && kalman_initialized_) {
-      double z[2] = { meas_x, meas_y };
-      double y[2] = { z[0] - kf_state_[0], z[1] - kf_state_[1] };
-      double S[2][2] = {
-        { kf_P_[0][0] + kalman_measurement_noise_, kf_P_[0][1] },
-        { kf_P_[1][0], kf_P_[1][1] + kalman_measurement_noise_ }
-      };
-      double invS0 = 1.0 / S[0][0];
-      double invS1 = 1.0 / S[1][1];
-      double K[4][2];
-      for (int i = 0; i < 4; i++) {
-        K[i][0] = kf_P_[i][0] * invS0;
-        K[i][1] = kf_P_[i][1] * invS1;
-      }
-      for (int i = 0; i < 4; i++) {
-        kf_state_[i] += K[i][0] * y[0] + K[i][1] * y[1];
-      }
-      kf_P_[0][0] = (1 - K[0][0]) * kf_P_[0][0];
-      kf_P_[1][1] = (1 - K[1][1]) * kf_P_[1][1];
-      last_kf_time_ = now;
     }
 
     // ----------------------------
@@ -370,6 +386,9 @@ private:
   double kalman_process_noise_;
   double kalman_measurement_noise_;
   rclcpp::Time last_kf_time_;
+
+  // 칼만 필터 적용 여부를 결정하는 파라미터
+  bool use_kalman_filter_;
 
   // 이전 위치 및 heading 저장 (orientation 계산용)
   double prev_x_;
