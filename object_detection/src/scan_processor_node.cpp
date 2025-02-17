@@ -242,7 +242,7 @@ private:
     }
     return filtered_points;
   }
-  // --- 새로 추가된 함수: 두 후보점 사이를 선형 보간하여 중간 점들을 생성 ---
+  // 두 후보점 사이를 선형 보간하여 중간 점들을 생성
   std::vector<geometry_msgs::msg::PointStamped> interpolateCandidates(
       const geometry_msgs::msg::PointStamped& p1,
       const geometry_msgs::msg::PointStamped& p2,
@@ -281,15 +281,20 @@ private:
       geometry_msgs::msg::PointStamped laser_pt, map_pt;
       laser_pt.header.frame_id = scan_msg->header.frame_id;
       // 최신 변환을 사용하기 위해 Time(0)로 설정 (scan_msg->header.stamp 대신)
-      laser_pt.header.stamp = rclcpp::Time(0);
+      laser_pt.header.stamp = scan_msg->header.stamp;
       laser_pt.point.x = pt.x;
       laser_pt.point.y = pt.y;
       laser_pt.point.z = 0.0;
+
+      if (!tf_buffer_.canTransform("map", scan_msg->header.frame_id, scan_msg->header.stamp, tf2::durationFromSec(0.1))) {
+        RCLCPP_WARN(this->get_logger(), "Transform not available for time %.2f", scan_msg->header.stamp);
+        return;  // 또는 적절히 대기 후 재시도
+      }
       try {
         tf_buffer_.transform(laser_pt, map_pt, "map", tf2::durationFromSec(0.1));
         map_points.push_back({ map_pt.point.x, map_pt.point.y });
       } catch (tf2::TransformException &ex) {
-        RCLCPP_WARN(this->get_logger(), "Transform failed: %s", ex.what());
+        RCLCPP_WARN(this->get_logger(), "Laser to Map Transform failed: %s", ex.what());
       }
     }
     
