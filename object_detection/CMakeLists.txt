@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.5)
 project(object_detection)
 
+# C++ 표준 (필요시 14 이상으로 설정)
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
 
+# ament_cmake 및 의존 패키지 찾기
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -45,19 +47,21 @@ ament_target_dependencies(visualization_node
   visualization_msgs
 )
 
-# occupancy_grid_node: pgm 파일 사용해 map 토픽 발행
-#add_executable(occupancy_grid_node src/occupancy_grid_node.cpp)
-#ament_target_dependencies(occupancy_grid_node
-#  rclcpp
-#  nav_msgs
-#)
+# time_debugger_node: 각 토픽별 time stamp 비교
+add_executable(time_debugger_node src/time_debugger_node.cpp)
+ament_target_dependencies(time_debugger_node
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  nav_msgs
+)
 
 # 설치 대상 설정
 install(TARGETS
   scan_processor_node
   obstacle_tracker_node
   visualization_node
-  occupancy_grid_node
+  time_debugger_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

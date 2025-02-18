@@ -35,9 +35,10 @@ def generate_launch_description():
         ),
         Node(
             package='object_detection',
-            executable='occupancy_grid_node',
-            name='occupancy_grid_node',
+            executable='time_debugger_node',
+            name='time_debugger_node',
             output='screen',
             parameters=[config_path]
         )
+        
     ])

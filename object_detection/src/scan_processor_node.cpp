@@ -62,8 +62,8 @@ public:
     this->get_parameter("dynamic_wall_gap_factor", dynamic_wall_gap_factor_);
     
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>("/scan", 20, std::bind(&ScanProcessor::scanCallback, this, std::placeholders::_1));
-    candidate_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/obstacle_candidates", 10);
-    filtered_scan_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("filtered_scan_points", 10);
+    candidate_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/obstacle_candidates", 20);
+    filtered_scan_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("filtered_scan_points", 20);
   }
   
 private:
@@ -193,8 +193,7 @@ private:
     if (extent < 1e-6)
       extent = 1e-6;  // 0으로 나누는 것을 방지
     double density = static_cast<double>(cluster.size()) / extent;  // 단위: 점/미터
-    RCLCPP_INFO(this->get_logger(), "Cluster density: %.2f, Points: %d, Extent: %.2f",
-                density, static_cast<int>(cluster.size()), extent);
+    // RCLCPP_INFO(this->get_logger(), "Cluster density: %.2f, Points: %d, Extent: %.2f", density, static_cast<int>(cluster.size()), extent);
     return density;
   }
   
@@ -285,16 +284,18 @@ private:
       laser_pt.point.x = pt.x;
       laser_pt.point.y = pt.y;
       laser_pt.point.z = 0.0;
-
+      
+      // 디버깅을 위한 타입 변환후 변수 저장
       if (!tf_buffer_.canTransform("map", scan_msg->header.frame_id, scan_msg->header.stamp, tf2::durationFromSec(0.1))) {
-        RCLCPP_WARN(this->get_logger(), "Transform not available for time %.2f", scan_msg->header.stamp);
+        double time_sec = scan_msg->header.stamp.sec + scan_msg->header.stamp.nanosec * 1e-9;
+        RCLCPP_WARN(this->get_logger(), "Transform not available for time %.2f", time_sec);
         return;  // 또는 적절히 대기 후 재시도
       }
       try {
         tf_buffer_.transform(laser_pt, map_pt, "map", tf2::durationFromSec(0.1));
         map_points.push_back({ map_pt.point.x, map_pt.point.y });
       } catch (tf2::TransformException &ex) {
-        RCLCPP_WARN(this->get_logger(), "Laser to Map Transform failed: %s", ex.what());
+        RCLCPP_WARN(this->get_logger(), "Transform(Laser frame datas to Map frame datas) failed: %s", ex.what());
       }
     }
     
@@ -303,7 +304,7 @@ private:
     try {
       sensor_transform = tf_buffer_.lookupTransform("map", scan_msg->header.frame_id, scan_msg->header.stamp, tf2::durationFromSec(0.1));
     } catch (tf2::TransformException &ex) {
-      RCLCPP_WARN(this->get_logger(), "Sensor transform lookup failed: %s", ex.what());
+      RCLCPP_WARN(this->get_logger(), "Transform(Laser Sensor location in map frame) lookup failed: %s", ex.what());
       sensor_transform.transform.translation.x = 0.0;
       sensor_transform.transform.translation.y = 0.0;
     }

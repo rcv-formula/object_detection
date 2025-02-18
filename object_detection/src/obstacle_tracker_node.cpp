@@ -75,6 +75,8 @@ private:
     double meas_x = 0.0, meas_y = 0.0;
     bool measurement_available = false;
 
+    rclcpp::Time candidate_stamp = now;  // 기본값은 현재 시간
+
     if (!candidate_points_.empty()) {
       // ----------------------------
       // 1. DBSCAN 클러스터링
@@ -82,14 +84,12 @@ private:
       size_t N = candidate_points_.size();
       std::vector<int> cluster_ids(N, -1);  // -1: 미할당, -2: 노이즈
 
-      // 람다: 두 점 사이의 유클리드 거리 계산
       auto distance = [&](size_t i, size_t j) -> double {
         double dx = candidate_points_[i].point.x - candidate_points_[j].point.x;
         double dy = candidate_points_[i].point.y - candidate_points_[j].point.y;
         return std::sqrt(dx * dx + dy * dy);
       };
 
-      // 람다: index i에 대해 eps 이내의 이웃 인덱스들을 반환
       auto regionQuery = [&](size_t i) -> std::vector<size_t> {
         std::vector<size_t> neighbors;
         for (size_t j = 0; j < N; j++) {
@@ -112,7 +112,6 @@ private:
         // 새로운 클러스터 생성
         cluster_ids[i] = cluster_id;
         std::vector<size_t> seed_set = neighbors;
-        // 클러스터 확장
         for (size_t idx = 0; idx < seed_set.size(); idx++) {
           size_t j = seed_set[idx];
           if (cluster_ids[j] == -2) {
@@ -150,6 +149,26 @@ private:
         measurement_available = true;
         // 측정이 이루어진 경우, 마지막 측정 시간 업데이트
         last_measurement_time_ = now;
+
+        // --------------------------------------------------
+        // 클러스터를 구성하는 점들의 timestamp 평균 계산 (nanosecond 단위로)
+        // --------------------------------------------------
+        uint64_t sum_ns = 0;
+        for (size_t idx : clusters[best_cluster]) {
+          const auto & t = candidate_points_[idx].header.stamp;
+          uint64_t ns = static_cast<uint64_t>(t.sec) * 1000000000ull + t.nanosec;
+          sum_ns += ns;
+        }
+        uint64_t avg_ns = sum_ns / clusters[best_cluster].size();
+        uint64_t avg_sec = avg_ns / 1000000000ull;
+        uint64_t avg_nanosec = avg_ns % 1000000000ull;
+        // 평균 timestamp를 builtin_interfaces::msg::Time으로 생성한 후 rclcpp::Time으로 변환
+        builtin_interfaces::msg::Time avg_time;
+        avg_time.sec = static_cast<int32_t>(avg_sec);
+        avg_time.nanosec = static_cast<uint32_t>(avg_nanosec);
+        candidate_stamp = rclcpp::Time(avg_time);
+        // --------------------------------------------------
+
         // ----------------------------
         // 3. 대표점 산출: 가중 평균 또는 가중 중앙값
         // ----------------------------
@@ -163,7 +182,6 @@ private:
         const double epsilon = 1e-3;
 
         if (!use_weighted_median_) {
-          // 가중 평균: 각 점의 가중치는 클러스터 중심으로부터의 역거리
           double weighted_sum_x = 0.0, weighted_sum_y = 0.0, total_weight = 0.0;
           for (size_t idx : clusters[best_cluster]) {
             double dx = candidate_points_[idx].point.x - center_x;
@@ -177,7 +195,6 @@ private:
           meas_x = weighted_sum_x / total_weight;
           meas_y = weighted_sum_y / total_weight;
         } else {
-          // 가중 중앙값: x, y 각각에 대해 중앙값 산출 (가중치는 1/(distance+epsilon))
           struct WeightedVal {
             double val;
             double weight;
@@ -225,19 +242,15 @@ private:
     // 4. 칼만 필터 업데이트 (측정이 없으면 예측만 수행)
     // ----------------------------
     if (use_kalman_filter_) {
-      // 칼만 필터 적용 시: 기존의 칼만 필터 로직 수행
       double dt = 0.1; // 기본 dt (타이머 주기)
       if (kalman_initialized_) {
         dt = (now - last_kf_time_).seconds();
-        // 예측 단계: 상태 전이 F 적용 (상태: [x, y, vx, vy])
         kf_state_[0] = kf_state_[0] + kf_state_[2] * dt;
         kf_state_[1] = kf_state_[1] + kf_state_[3] * dt;
-        // 간단히 속도는 그대로 둠.
         for (int i = 0; i < 4; i++) {
           kf_P_[i][i] += kalman_process_noise_;
         }
       } else {
-        // 초기화: 측정이 있을 때만 초기 상태를 설정
         if (measurement_available) {
           kf_state_[0] = meas_x;
           kf_state_[1] = meas_y;
@@ -253,7 +266,6 @@ private:
         }
       }
       
-      // 칼만 필터 측정 업데이트 (update 단계)
       if (measurement_available && kalman_initialized_) {
         double z[2] = { meas_x, meas_y };
         double y[2] = { z[0] - kf_state_[0], z[1] - kf_state_[1] };
@@ -276,7 +288,6 @@ private:
         last_kf_time_ = now;
       }
     } else {
-      // 칼만 필터 미적용 시: 측정값이 있으면 직접 상태에 할당 (예측/업데이트 없이)
       if (measurement_available) {
         kf_state_[0] = meas_x;
         kf_state_[1] = meas_y;
@@ -291,14 +302,14 @@ private:
     // 5. 최종 장애물 상태 퍼블리시 (odom 메시지)
     // ----------------------------
     if (kalman_initialized_) {
-      publishOdomWithKalmanState(now);
+      // 선택된 클러스터의 평균 timestamp(candidate_stamp)를 header.stamp로 사용합니다.
+      publishOdomWithKalmanState(candidate_stamp);
     }
 
     // ----------------------------
     // 6. 장애물 감지 상태(bool) 퍼블리시
     // ----------------------------
     std_msgs::msg::Bool detected_msg;
-    // 측정 업데이트가 일정 시간(obstacle_timeout_) 이내에 있었으면 장애물이 존재하는 것으로 판단.
     if (kalman_initialized_ && (now - last_measurement_time_).seconds() < obstacle_timeout_) {
       detected_msg.data = true;
     } else {
@@ -309,36 +320,33 @@ private:
 
   // 칼만 필터 상태를 이용해 odom 메시지를 퍼블리시 (orientation은 이전 위치와 현재 위치의 차이로 계산)
   void publishOdomWithKalmanState(const rclcpp::Time & stamp) {
-    // 기존에는 속도 성분을 이용하여 heading을 계산했으나,
-    // 여기서는 이전 위치(prev_x_, prev_y_)와 현재 위치(kf_state_[0], kf_state_[1])의 단순 차이로 heading을 계산합니다.
+    // 이전 위치(prev_x_, prev_y_)와 현재 위치(kf_state_[0], kf_state_[1])의 차이로 heading 계산
     double heading = 0.0;
     if (has_prev_position_) {
       double dx = kf_state_[0] - prev_x_;
       double dy = kf_state_[1] - prev_y_;
-      // 충분한 이동이 있는 경우에만 heading을 업데이트
+      // 충분한 이동이 있는 경우에만 heading 업데이트
       if (std::sqrt(dx * dx + dy * dy) > 1e-3) {
         heading = std::atan2(dy, dx);
       } else {
-        // 이동이 미미하면 이전 heading을 유지
         heading = prev_heading_;
       }
     } else {
-      // 첫 번째 측정 시 기본값 0
       heading = 0.0;
       has_prev_position_ = true;
     }
-    // 저장: 다음 계산을 위해 현재 위치와 heading을 보관
+    // 현재 위치와 heading 저장 (다음 계산을 위해)
     prev_x_ = kf_state_[0];
     prev_y_ = kf_state_[1];
     prev_heading_ = heading;
 
-    // orientation 계산: 단순히 computed heading으로 Quaternion 생성
+    // heading으로 Quaternion 계산 (yaw만 사용)
     double sin_yaw = std::sin(heading * 0.5);
     double cos_yaw = std::cos(heading * 0.5);
 
     nav_msgs::msg::Odometry odom_msg;
     odom_msg.header.stamp = stamp;
-    odom_msg.header.frame_id = "map";  // map frame에서 발행
+    odom_msg.header.frame_id = "map";  // map 좌표계
 
     odom_msg.pose.pose.position.x = kf_state_[0];
     odom_msg.pose.pose.position.y = kf_state_[1];
